@@ -95,35 +95,39 @@ INVOICE_SCHEMA = {
 
 
 # ------------------------------------------------------------------ 1. EXTRACT
+SARVAM = "https://api.sarvam.ai"
+
+
 def extract_invoice(file_bytes, filename, api_key):
-    """Sarvam Document AI 'extract' job -> structured invoice JSON."""
-    from sarvamai import SarvamAI
-    client = SarvamAI(api_subscription_key=api_key)
-    mime = "application/pdf" if filename.lower().endswith(".pdf") else \
-           ("image/png" if filename.lower().endswith(".png") else "image/jpeg")
-    with tempfile.NamedTemporaryFile(suffix=os.path.splitext(filename)[1], delete=False) as tmp:
-        tmp.write(file_bytes)
-        path = tmp.name
-    with open(path, "rb") as f:
-        job = client.doc_ai.extract(
-            file=[(filename, f, mime)],
-            schema=json.dumps(INVOICE_SCHEMA),
-            language="en-IN",
-            output_format="json",
-        )
-    terminal = {"completed", "partially_completed", "failed", "rejected"}
-    for _ in range(40):  # ~2 min max
-        s = client.doc_ai.get_status(job_id=job.job_id)
-        if s.status.lower() in terminal:
+    """Sarvam Document AI 'extract' job via REST (works regardless of installed SDK version)."""
+    hdr = {"api-subscription-key": api_key}
+    low = filename.lower()
+    mime = "application/pdf" if low.endswith(".pdf") else ("image/png" if low.endswith(".png") else "image/jpeg")
+    r = requests.post(f"{SARVAM}/doc-ai/v1/job/extract", headers=hdr,
+                      files={"file": (filename, file_bytes, mime)},
+                      data={"schema": json.dumps(INVOICE_SCHEMA), "language": "en-IN", "output_format": "json"},
+                      timeout=120)
+    if not r.ok:
+        raise RuntimeError(f"create job {r.status_code}: {r.text[:300]}")
+    job_id = r.json()["job_id"]
+    status = ""
+    for _ in range(45):  # ~2 min max
+        sr = requests.get(f"{SARVAM}/doc-ai/v1/job/{job_id}/status", headers=hdr, timeout=60)
+        if not sr.ok:
+            raise RuntimeError(f"status {sr.status_code}: {sr.text[:300]}")
+        status = str(sr.json().get("status", "")).lower()
+        if status in ("completed", "partially_completed", "failed", "rejected"):
             break
         time.sleep(3)
-    if s.status.lower() not in ("completed", "partially_completed"):
-        raise RuntimeError(f"Sarvam job ended as {s.status}")
-    res = client.doc_ai.get_results(job_id=job.job_id).result
+    if status not in ("completed", "partially_completed"):
+        raise RuntimeError(f"Sarvam job ended as '{status or 'timeout'}'")
+    rr = requests.get(f"{SARVAM}/doc-ai/v1/job/{job_id}/results", headers=hdr, timeout=60)
+    if not rr.ok:
+        raise RuntimeError(f"results {rr.status_code}: {rr.text[:300]}")
+    res = rr.json().get("result", rr.json())
     if isinstance(res, str):
         res = json.loads(res)
-    # some responses wrap the fields in a list / "fields" key; normalise
-    if isinstance(res, list) and res:
+    if isinstance(res, list) and res:  # some responses wrap fields in a list / nested key; normalise
         res = res[0]
     if isinstance(res, dict) and "lines" not in res:
         for v in res.values():
@@ -200,17 +204,32 @@ def reconcile(inv):
 
 
 # ------------------------------------------------------------------ 3. EMAIL
+CHAT_MODELS = ["sarvam-105b", "sarvam-30b"]  # current flagship first, older id as fallback
+_chat_ok = {}  # remembers the model/params combo that worked
+
+
 def sarvam_chat(prompt, api_key, temperature=0.4):
-    r = requests.post(
-        "https://api.sarvam.ai/v1/chat/completions",
-        headers={"api-subscription-key": api_key, "Content-Type": "application/json"},
-        json={"model": "sarvam-30b", "temperature": temperature,
-              "messages": [{"role": "user", "content": prompt}]},
-        timeout=90,
-    )
-    r.raise_for_status()
-    txt = r.json()["choices"][0]["message"].get("content") or ""
-    return re.sub(r"<think>.*?</think>", "", txt, flags=re.S).strip()
+    hdr = {"api-subscription-key": api_key, "Content-Type": "application/json"}
+    combos = [_chat_ok["c"]] if "c" in _chat_ok else [(m, x) for m in CHAT_MODELS for x in (True, False)]
+    last = "no response"
+    for model, no_reason in combos:
+        body = {"model": model, "temperature": temperature, "max_tokens": 2000,
+                "messages": [{"role": "user", "content": prompt}]}
+        if no_reason:
+            body["reasoning_effort"] = None  # skip thinking mode: faster, and no tokens lost to reasoning
+        r = requests.post(f"{SARVAM}/v1/chat/completions", headers=hdr, json=body, timeout=90)
+        if r.status_code in (401, 403, 429):
+            raise RuntimeError(f"{r.status_code}: {r.text[:200]}")
+        if r.ok:
+            txt = r.json()["choices"][0]["message"].get("content") or ""
+            txt = re.sub(r"<think>.*?</think>", "", txt, flags=re.S).strip()
+            if txt:
+                _chat_ok["c"] = (model, no_reason)
+                return txt
+            last = f"{model}: empty reply"
+        else:
+            last = f"{model} {r.status_code}: {r.text[:300]}"
+    raise RuntimeError(last)
 
 
 def draft_email(inv, issues, po, tone, risk, api_key):
@@ -278,10 +297,10 @@ def tts(text, code, api_key):
     """Sarvam Bulbul v3 -> wav bytes. Text capped at the API's 1500-char limit."""
     body = {"text": text[:1400], "model": "bulbul:v3", "speaker": "shubh", "language_code": code}
     hdr = {"api-subscription-key": api_key, "Content-Type": "application/json"}
-    r = requests.post("https://api.sarvam.ai/text-to-speech", headers=hdr, json=body, timeout=90)
+    r = requests.post(f"{SARVAM}/text-to-speech", headers=hdr, json=body, timeout=90)
     if r.status_code == 400:  # older param name
         body["target_language_code"] = body.pop("language_code")
-        r = requests.post("https://api.sarvam.ai/text-to-speech", headers=hdr, json=body, timeout=90)
+        r = requests.post(f"{SARVAM}/text-to-speech", headers=hdr, json=body, timeout=90)
     r.raise_for_status()
     return base64.b64decode("".join(r.json()["audios"]))
 
@@ -354,11 +373,19 @@ def analyse(inv, threshold=50):
 
 # ------------------------------------------------------------------ UI
 st.markdown("# 🚛 Freight Invoice Reconciler")
-st.caption("Read → reconcile → dispute → negotiate, in the supplier's own language. Sarvam Vision · Sarvam-30B · Bulbul TTS")
+st.caption("Read → reconcile → dispute → negotiate, in the supplier's own language. Sarvam Vision · Sarvam-105B · Bulbul TTS")
+
+def _default_key():
+    """Key from Streamlit secrets (deployed) or env var (local); else empty -> paste in sidebar."""
+    try:
+        return st.secrets["SARVAM_API_KEY"]
+    except Exception:
+        return os.environ.get("SARVAM_API_KEY", "")
+
 
 with st.sidebar:
     st.header("Settings")
-    api_key = st.text_input("Sarvam API key", type="password", value=os.environ.get("SARVAM_API_KEY", ""))
+    api_key = st.text_input("Sarvam API key", type="password", value=_default_key())
     demo = st.checkbox("Demo mode (skip Sarvam extraction)", value=not api_key)
     threshold = st.slider("Auto-hold if overbilling exceeds (% of invoice)", 10, 100, 50, 5)
     st.divider()

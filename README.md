@@ -2,7 +2,7 @@
 
 An AI agent that reads a freight invoice, checks it against the purchase order (PO), decides what to pay and what to hold, and disputes the supplier **in their own language**, ready to send on WhatsApp or email.
 
-Built on the **Sarvam AI** stack (Vision, Sarvam-30B, Bulbul) with a **Streamlit** UI.
+Built on the **Sarvam AI** stack (Vision, Sarvam-105B, Bulbul) with a **Streamlit** UI.
 
 > **Status:** hackathon prototype. It works end to end, but it is not production software. See [Limitations](#limitations).
 
@@ -50,9 +50,9 @@ Accounts-payable teams receive freight invoices in many formats and languages. C
 | 1 | **Read** | Extracts invoice number, PO number, line items, GST rate, IGST / CGST / SGST amounts and total from an uploaded invoice | Sarvam Vision (Document AI *Extract*) |
 | 2 | **Reconcile** | Fuzzy-matches lines to the PO and flags price, quantity, GST rate, GST type and items not on the PO | Python |
 | 3 | **Decide** | Gives a verdict (**Approve / Part-pay / Hold**) with the exact ₹ to release and ₹ to hold. Catches duplicate invoices | Python |
-| 4 | **Dispute** | Drafts the email in the supplier's language with a tone selector (Polite / Firm / Final notice), plus an English back-translation for your review | Sarvam-30B |
+| 4 | **Dispute** | Drafts the email in the supplier's language with a tone selector (Polite / Firm / Final notice), plus an English back-translation for your review | Sarvam-105B |
 | 5 | **Send** | Opens WhatsApp or your mail client prefilled, and can read the message aloud in the supplier's language | Sarvam Bulbul v3 |
-| 6 | **Negotiate** | You paste the supplier's reply. The agent translates it, classifies it (accepted / rejected / counter-offer), recommends an action and drafts your next reply | Sarvam-30B |
+| 6 | **Negotiate** | You paste the supplier's reply. The agent translates it, classifies it (accepted / rejected / counter-offer), recommends an action and drafts your next reply | Sarvam-105B |
 
 Also included:
 
@@ -71,7 +71,7 @@ flowchart LR
     D[(PO list<br/>CSV)] --> E
     C --> E[Reconcile<br/>price · qty · GST rate · GST type]
     E --> F[Decision engine<br/>Approve · Part-pay · Hold<br/>+ duplicate check]
-    F --> G[Sarvam-30B<br/>dispute email in supplier language]
+    F --> G[Sarvam-105B<br/>dispute email in supplier language]
     G --> H[WhatsApp · Email · Bulbul voice]
     H --> I[Supplier reply]
     I --> J[Reply agent<br/>translate · classify · draft next message]
@@ -208,8 +208,8 @@ score = 100 × (1 − flagged invoices ÷ total invoices)
 
 | Purpose | API | Model |
 |---------|-----|-------|
-| Invoice field extraction | Document AI `extract` job (create, poll status, get results) with an inline JSON schema | Sarvam Vision 1.5 |
-| Dispute emails, WhatsApp text, translation, reply analysis | `POST /v1/chat/completions` | `sarvam-30b` |
+| Invoice field extraction | Document AI `extract` job over REST (create, poll status, get results) with an inline JSON schema | Sarvam Vision 1.5 |
+| Dispute emails, WhatsApp text, translation, reply analysis | `POST /v1/chat/completions` | `sarvam-105b` |
 | Voice playback | `POST /text-to-speech` | `bulbul:v3` |
 
 Supported supplier languages are listed in the [PO format](#po-list-format-csv). The API docs are at <https://docs.sarvam.ai>.
@@ -240,7 +240,7 @@ Regenerate the images with `python make_samples.py` (needs Pillow).
 ```
 Freight-invoice/
 ├── app.py                    # the whole app: logic, Sarvam clients, UI
-├── requirements.txt          # streamlit, sarvamai, pandas, requests, pillow
+├── requirements.txt          # streamlit, pandas, requests, pillow
 ├── sample_pos.csv            # PO list template
 ├── make_samples.py           # regenerates the sample invoice images
 ├── sample_invoice_*.png      # demo invoices with planted errors
@@ -278,6 +278,7 @@ Notes:
 | Email not in the supplier's script | Click **Draft** again, or set the tone to Firm. The language comes from the PO record's `language` column |
 | Voice fails | Check the key and the 1,500-character limit. The rest of the app keeps working |
 | Reply agent error | The model must return JSON. Retry with a shorter reply |
+| Chat `400` error | The model name may have changed. The app tries `sarvam-105b` first, then `sarvam-30b`, and shows Sarvam's error text. Check <https://docs.sarvam.ai> for current model IDs |
 | `use_container_width` deprecation warnings | Harmless. They come from newer Streamlit versions |
 
 ## Limitations
@@ -302,4 +303,4 @@ Notes:
 
 ## Tech stack
 
-Streamlit · Sarvam Document AI (Vision 1.5) · Sarvam-30B · Sarvam Bulbul v3 · pandas · Python
+Streamlit · Sarvam Document AI (Vision 1.5) · Sarvam-105B · Sarvam Bulbul v3 · pandas · Python
