@@ -1,0 +1,6 @@
+po_number,supplier,language,gst_rate,item,qty,price,email,gst_type
+PO-1001,Sri Lakshmi Transport,Tamil,5,Chennai-Hyderabad FTL,2,42000,accounts@srilakshmi.example,IGST
+PO-1001,Sri Lakshmi Transport,Tamil,5,Loading charges,2,1500,accounts@srilakshmi.example,IGST
+PO-1002,Rajdhani Cargo Movers,Hindi,5,Delhi-Mumbai FTL,1,68000,billing@rajdhani.example,IGST
+PO-1003,Godavari Logistics,Telugu,18,Hyderabad-Vizag Part Load,4,9500,ap@godavari.example,IGST
+PO-1004,Pune Freight Lines,Marathi,5,Pune-Bengaluru FTL,1,52000,pfl@example.com,IGST
